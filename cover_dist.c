@@ -143,7 +143,9 @@ static PyMethodDef CoverDistMethods[] = {
 };
 
 static PyModuleDef_Slot coverdist_slots[] = {
+#if PY_VERSION_HEX >= 0x030D0000
     {Py_mod_gil, Py_MOD_GIL_NOT_USED},
+#endif
     {0, NULL}
 };
 
