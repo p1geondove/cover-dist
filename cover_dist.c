@@ -1,9 +1,7 @@
-#include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
-#include <time.h>
 #include <Python.h>
 
 #define BLOCKSIZE 1024*1024
@@ -79,7 +77,7 @@ ScanResult cover_dist(char* file_path, int num_digits){
     bufp = fgets(block, BLOCKSIZE, fptr);
 
     // cut out the radix ., copy the int part and paste it one later, then just start iterating over the block one later
-    char intpart[radix_pos];
+    char intpart[20];
     memcpy(intpart, block, radix_pos);
     memcpy(block+1, intpart, radix_pos);
     size_t block_offset = 1;
@@ -163,30 +161,4 @@ static struct PyModuleDef coverdistmodule = {
 
 PyMODINIT_FUNC PyInit_coverdist(void){
     return PyModuleDef_Init(&coverdistmodule);
-}
-
-int main(int argc, char* argv[]){
-    uint8_t num_digits = 5;
-    char* file_path = "./nums/pi";
-
-    if (argc == 2){
-        num_digits = atoi(argv[1]);
-    }
-    if (argc == 3){
-        num_digits = atoi(argv[1]);
-        file_path = argv[2];
-    }
-
-    struct timespec t;
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    double time_start = (double)t.tv_sec + (double)t.tv_nsec/1e9;
-
-    ScanResult res = cover_dist(file_path, num_digits);
-
-    clock_gettime(CLOCK_MONOTONIC, &t);
-    double time_end = (double)t.tv_sec + (double)t.tv_nsec/1e9;
-
-    printf("dist: %zu, last num: %zu\n", res.dist, res.last_num);
-    printf("took: %fs\n", time_end - time_start);
-    return EXIT_SUCCESS;
 }
