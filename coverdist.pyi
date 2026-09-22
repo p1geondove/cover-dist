@@ -1,0 +1,3 @@
+def cover_dist(file_path:str, num_digits:int) -> tuple[int,int]:
+    """ Digits needed and last digits to cover all n-digit numbers """
+    ...
