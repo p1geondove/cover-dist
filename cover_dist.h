@@ -92,9 +92,20 @@ ScanResult cover_dist(char* file_path, int num_digits){
     size_t window = 0;
     size_t pow10mod = 1;
 
-    // generate the first window
+    // move the integer part to the right, overwriting the radix . to give a clean start to the sequence
     memcpy(buffer+1, buffer, radix_pos);
-    for (int i=num_digits; i>0; i--){
+
+    // disregard the first 0s
+    // numbers like ln2 (0.69314) start with a 6, and not with a 0
+    // the integer sequence of some number 0.000123 would be (1,2,3)
+    size_t number_offset = 1;
+    for (; number_offset<BLOCKSIZE; number_offset++){
+        if (buffer[number_offset] != 48) break;
+    }
+    number_offset--; // -- because we used it as an index but have to skip the first char
+
+    // generate the first window
+    for (size_t i=num_digits+number_offset; i>number_offset; i--){
         window += (buffer[i]-48) * pow10mod;
         pow10mod *= 10;
     }
@@ -105,8 +116,8 @@ ScanResult cover_dist(char* file_path, int num_digits){
 
     // some more variables
     size_t file_offset, nextn, droppedn;
-    size_t block_offset = num_digits + 1;
-    file_offset = block_offset;
+    size_t block_offset = num_digits + 1 + number_offset;
+    file_offset = block_offset - number_offset;
 
     // main loop
     while (file_size > file_offset+block_offset){ // loop until file ends to not segfault
@@ -119,7 +130,8 @@ ScanResult cover_dist(char* file_path, int num_digits){
             packedbools_set(window, &bools);
             if (bools.remaining == 0){
                 packedbools_free(&bools);
-                return (ScanResult){file_offset+block_offset-num_digits-1, window};
+                size_t dist = file_offset + block_offset - num_digits - 1 - number_offset;
+                return (ScanResult){dist, window};
             }
         }
 
@@ -140,7 +152,8 @@ ScanResult cover_dist(char* file_path, int num_digits){
 
             if (bools.remaining == 0){
                 packedbools_free(&bools);
-                return (ScanResult){file_offset+block_offset-num_digits-1, window};
+                size_t dist = file_offset + block_offset - num_digits - 1 - number_offset;
+                return (ScanResult){dist, window};
             }
             block_offset++;
         }
