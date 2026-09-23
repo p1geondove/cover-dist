@@ -6,3 +6,4 @@ results.json
 *.so
 dist/
 .wheels/
+.venv/
