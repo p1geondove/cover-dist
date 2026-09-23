@@ -1,7 +1,8 @@
 *.out
 nums/
 coverdist.egg-info/
-coverdist.cpython-314t-x86_64-linux-gnu.so
 compile_flags.txt
 results.json
+*.so
 dist/
+.wheels/
