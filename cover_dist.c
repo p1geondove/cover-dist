@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 #include <Python.h>
 
 #define BLOCKSIZE 1024*1024
@@ -25,14 +28,14 @@ PackedBools packedbools_make(size_t num_bools){
     bools.remaining = num_bools;
     return bools;
 }
+
 // sets bit to 1 and returns true if it was already set
-bool packedbools_set(size_t index, PackedBools* bools){
+void packedbools_set(size_t index, PackedBools* bools){
     size_t byte_index = index >> 3; // divide by 8
     uint8_t mask = 1 << (index & 7); // bit mask
-    if (bools->bools[byte_index] & mask) return false;
+    if (bools->bools[byte_index] & mask) return;
     bools->bools[byte_index] |= mask;
     bools->remaining--;
-    return true;
 }
 
 // helper function, just free(bools->bools)
@@ -62,65 +65,161 @@ int file_find_radix_point(char* file_path){
     return -1;
 }
 
+size_t get_file_size(char* file_path){
+    FILE* fptr = fopen(file_path, "r");
+    if (fptr == NULL){
+        perror("Cant open file");
+        return -1;
+    }
+    fseek(fptr, 0L, SEEK_END);
+    size_t end = ftell(fptr);
+    fclose(fptr);
+    return end;
+}
+
 ScanResult cover_dist(char* file_path, int num_digits){
     // number assume to have a radix . somewhere, skip that
     int radix_pos = file_find_radix_point(file_path);
     if (radix_pos == -1){
-        perror("Cant find radix pos\n");
+        perror("Cant find radix pos");
         return (ScanResult){0,0};
     }
 
-    // open file and read a block
-    char block[BLOCKSIZE];
-    FILE* fptr = fopen(file_path, "r");
-    char* bufp;
-    bufp = fgets(block, BLOCKSIZE, fptr);
+    size_t file_size = get_file_size(file_path);
 
-    // cut out the radix ., copy the int part and paste it one later, then just start iterating over the block one later
-    char intpart[20];
-    memcpy(intpart, block, radix_pos);
-    memcpy(block+1, intpart, radix_pos);
-    size_t block_offset = 1;
+    int fd = open(file_path, O_RDONLY);
+    if (fd == -1){
+        perror("Cant open file");
+        return (ScanResult){0,0};
+    }
 
-    // init first window and pow10mod value
-    size_t pow10mod = 1;
+    char* mmap_addr;
+    mmap_addr = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    madvise(mmap_addr, file_size, MADV_SEQUENTIAL);
+    close(fd);
+
+    // generate first window
     size_t window = 0;
-    for (int i=0; i<num_digits; i++){
-        window += pow10mod * (block[num_digits+block_offset-i]-48);
+    int pos = num_digits + 1;
+    size_t pow10mod = 1;
+    while (pos > 0){
+        pos--;
+        if (pos == radix_pos) continue;
+        window += (mmap_addr[pos]-48) * pow10mod;
         pow10mod *= 10;
     }
-    block_offset += num_digits;
-    size_t block_count = 0;
 
-    // create PackedBools
     PackedBools bools = packedbools_make(pow10mod);
     packedbools_set(window, &bools);
 
-    // main loop
-    while (1){
-        for (;block_offset<BLOCKSIZE;){
-            size_t nextn = block[block_offset++]-48;
-            window = (window * 10 + nextn) % pow10mod;
-            packedbools_set(window, &bools);
-            if (!bools.remaining){
-                packedbools_free(&bools);
-                size_t dist = block_offset - radix_pos + BLOCKSIZE * block_count - block_count;
-                ScanResult res = {dist, window};
-                return res;
-            }
-        }
-
-        bufp = fgets(block, BLOCKSIZE, fptr);
-        if (bufp == NULL){
+    // first walk "manually" over the radix .
+    size_t file_offset, nextn, droppedn;
+    file_offset = num_digits + 1;
+    for (int i=0; i<radix_pos; i++){
+        nextn = mmap_addr[file_offset]-48;
+        droppedn = mmap_addr[file_offset-num_digits-1]-48;
+        window = window * 10 + nextn - droppedn * pow10mod;
+        packedbools_set(window, &bools);
+        if (bools.remaining == 0){
+            munmap(mmap_addr, file_size);
             packedbools_free(&bools);
-            perror("file ended");
-            return (ScanResult){0,0};
+            return (ScanResult){file_offset, window};
         }
-
-        block_offset = 0;
-        block_count++;
+        file_offset++;
     }
+
+    // main loop
+    size_t advised_offset = 0;
+    size_t page_size = sysconf(_SC_PAGESIZE);
+    size_t aligned_start, len;
+    while (true){ // TODO: this might loop till the end of the file end and segfault
+        for (int i=0; i<page_size*page_size; i++){
+            nextn = mmap_addr[file_offset]-48;
+            droppedn = mmap_addr[file_offset-num_digits]-48;
+            window = window * 10 + nextn - droppedn * pow10mod;
+            packedbools_set(window, &bools);
+            if (bools.remaining == 0){
+                munmap(mmap_addr, file_size);
+                packedbools_free(&bools);
+                return (ScanResult){file_offset, window};
+            }
+            file_offset++;
+        }
+        // drop old pages. not really nessecarry, but without it looks like the programs takes gigabytes of memory when it doesnt
+        aligned_start = advised_offset - (advised_offset % page_size);
+        len = file_offset - aligned_start;
+        madvise(mmap_addr+aligned_start, len, MADV_DONTNEED);
+        advised_offset = file_offset;
+    }
+
+    munmap(mmap_addr, file_size);
+    packedbools_free(&bools);
+    perror("file ended");
+    return (ScanResult){0,0};
 }
+
+// ScanResult cover_dist(char* file_path, int num_digits){
+//     // number assume to have a radix . somewhere, skip that
+//     int radix_pos = file_find_radix_point(file_path);
+//     if (radix_pos == -1){
+//         perror("Cant find radix pos\n");
+//         return (ScanResult){0,0};
+//     }
+//
+//     // open file and read a block
+//     char block[BLOCKSIZE];
+//     FILE* fptr = fopen(file_path, "r");
+//     char* bufp;
+//     bufp = fgets(block, BLOCKSIZE, fptr);
+//
+//     // cut out the radix ., copy the int part and paste it one later, then just start iterating over the block one later
+//     char intpart[20];
+//     memcpy(intpart, block, radix_pos);
+//     memcpy(block+1, intpart, radix_pos);
+//     size_t block_offset = 1;
+//
+//     // init first window and pow10mod value
+//     size_t pow10mod = 1;
+//     size_t window = 0;
+//     // size_t droppedn = block[1]-48;
+//     for (int i=0; i<num_digits; i++){
+//         window += pow10mod * (block[num_digits+block_offset-i]-48);
+//         pow10mod *= 10;
+//     }
+//     block_offset += num_digits;
+//     size_t block_count = 0;
+//
+//     // create PackedBools
+//     PackedBools bools = packedbools_make(pow10mod);
+//     packedbools_set(window, &bools);
+//
+//     // main loop
+//     while (1){
+//         for (;block_offset<BLOCKSIZE;){
+//             size_t nextn = block[block_offset++]-48;
+//             window = (window * 10 + nextn) % pow10mod;
+//             // droppedn = block[block_offset-num_digits];
+//             // window = window * 10 + nextn - droppedn * pow10mod;
+//             packedbools_set(window, &bools);
+//             if (!bools.remaining){
+//                 packedbools_free(&bools);
+//                 size_t dist = block_offset - radix_pos + BLOCKSIZE * block_count - block_count;
+//                 ScanResult res = {dist, window};
+//                 return res;
+//             }
+//         }
+//
+//         bufp = fgets(block, BLOCKSIZE, fptr);
+//         if (bufp == NULL){
+//             packedbools_free(&bools);
+//             perror("file ended");
+//             return (ScanResult){0,0};
+//         }
+//
+//         block_offset = 0;
+//         block_count++;
+//     }
+// }
 
 static PyObject* py_cover_dist(PyObject* self, PyObject* args){
     char* file_path;
