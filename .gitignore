@@ -7,3 +7,4 @@ results.json
 dist/
 .wheels/
 .venv/
+.python-version
