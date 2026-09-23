@@ -5,12 +5,6 @@
 
 #define BLOCKSIZE 1024*1024
 
-#ifdef _MSC_VER
-#define read _fread_nolock
-#else
-#define read fread_unlocked
-#endif
-
 typedef struct {
     uint8_t* bools;
     size_t remaining;
@@ -94,9 +88,8 @@ ScanResult cover_dist(char* file_path, int num_digits){
     char* buffer_prev = bufferb;
     char* buffer_tmp = NULL;
 
-    read(buffera, 1, BLOCKSIZE, fptr);
+    fread(buffera, 1, BLOCKSIZE, fptr);
     size_t window = 0;
-    int pos = num_digits + 1;
     size_t pow10mod = 1;
 
     // generate the first window
@@ -111,8 +104,7 @@ ScanResult cover_dist(char* file_path, int num_digits){
     packedbools_set(window, &bools);
 
     // some more variables
-    size_t file_offset, nextn, droppedn, aligned_start;
-    size_t num_blocks = 0;
+    size_t file_offset, nextn, droppedn;
     size_t block_offset = num_digits + 1;
     file_offset = block_offset;
 
@@ -139,7 +131,7 @@ ScanResult cover_dist(char* file_path, int num_digits){
         buffer_prev = buffer_tmp;
 
         // read the next chunk and just walk "num_digits" steps, nextn from new buffer, droppedn from prev buffer
-        read(buffer, 1, BLOCKSIZE, fptr);
+        fread(buffer, 1, BLOCKSIZE, fptr);
         block_offset = 0;
         for (int i=0; i<num_digits; i++){
             nextn = buffer[block_offset]-48;
