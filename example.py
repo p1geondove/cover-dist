@@ -1,6 +1,5 @@
 from pathlib import Path
 from threading import Lock, Thread
-from dataclasses import dataclass
 import json
 
 from coverdist import cover_dist
@@ -10,7 +9,12 @@ MAX_DIGITS = 7
 
 class SharedMem:
     lock:Lock = Lock()
-    res_dict:dict[str,dict[str,list[int]]] = {}
+    res_dict:dict[str,dict[str,list[int]]] = {
+        n.name:{
+            "distances":[],
+            "last_nums":[]
+        } for n in NUM_FILES
+    }
 
 def _worker(number_file:Path, mem:SharedMem):
     num_name = number_file.name
@@ -19,13 +23,9 @@ def _worker(number_file:Path, mem:SharedMem):
 
     for n in range(1,MAX_DIGITS+1):
         dist, last_num = cover_dist(str(number_file), n)
-        distances.append(dist)
-        last_nums.append(last_num)
-
-    with mem.lock:
-        mem.res_dict[num_name] = {}
-        mem.res_dict[num_name]["distances"] = distances
-        mem.res_dict[num_name]["last_nums"] = last_nums
+        with mem.lock:
+            mem.res_dict[num_name]["distances"].append(dist)
+            mem.res_dict[num_name]["last_nums"].append(last_num)
 
 def main():
     mem = SharedMem()
@@ -39,7 +39,7 @@ def main():
     for t in workers:
         t.join()
 
-    with Path("results.json").open("wt") as f:
+    with Path("results2.json").open("wt") as f:
         json.dump(mem.res_dict, f, indent=4)
 
 if __name__ == "__main__":
