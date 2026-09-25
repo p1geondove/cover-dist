@@ -2,36 +2,57 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 
-#define BLOCKSIZE 1024*1024
+#define BUFFERSIZE 1024*1024
 
 typedef struct {
     uint8_t* bools;
     size_t remaining;
 } PackedBools;
 
+typedef enum {
+    OK,
+    ERR_NO_RADIX,
+    ERR_MULTIPLE_RADIX,
+    ERR_INVALID_CHAR,
+    ERR_ALLOCATION,
+    ERR_OPEN_FAILED,
+    ERR_INSUFFICIENT_DIGITS
+} Status;
+
+typedef struct {
+    size_t size;
+    size_t radix_pos;
+    size_t zero_offset;
+    Status status;
+} FileMeta;
+
 typedef struct {
     size_t dist;
     size_t last_num;
+    int save_errno;
+    Status status;
 } ScanResult;
 
 PackedBools packedbools_make(size_t num_bools){
     size_t bytes_needed = num_bools / 8 + (num_bools % 8 > 0);
     PackedBools bools;
-    uint8_t* arr = (uint8_t*)malloc(bytes_needed);
-    memset(arr, 0, bytes_needed);
+    void* _arr = calloc(bytes_needed,1);
+    if (_arr == NULL) return (PackedBools){0,0};
+    uint8_t* arr = (uint8_t*)_arr;
     bools.bools = arr;
     bools.remaining = num_bools;
     return bools;
 }
 
-// sets bit to 1 and returns true if it was already set
-void packedbools_set(size_t index, PackedBools* bools){
+// sets bit to 1 and returns true if all bits are set
+int packedbools_set(size_t index, PackedBools* bools){
     size_t byte_index = index >> 3; // divide by 8
     uint8_t mask = 1 << (index & 7); // bit mask
-    if (bools->bools[byte_index] & mask) return;
+    if (bools->bools[byte_index] & mask) return 0;
     bools->bools[byte_index] |= mask;
-    bools->remaining--;
+    return --bools->remaining == 0;
 }
 
 // helper function, just free(bools->bools)
@@ -39,126 +60,126 @@ void packedbools_free(PackedBools* bools){
     free(bools->bools);
 }
 
-int get_radix_pos(char* file_path){
-    FILE* fptr = fopen(file_path, "r");
-    if (fptr == NULL){
-        perror("Cant open file");
-        return -1;
+// checks if the file is valid (only)
+FileMeta get_metadata(FILE* fptr){
+    long off = ftell(fptr); // first store the current position
+    fseek(fptr, 0, SEEK_SET); // seek to the start
+    char buffer[BUFFERSIZE] = {0}; // allocate a block
+    fread(buffer, 1, BUFFERSIZE, fptr); // get a block
+    size_t radix_count = 0; // used to check wether ther is only exactly one
+    FileMeta meta = {0}; // yeah... return data
+    meta.status = OK;
+
+    // scan the entire first block for invalid chars and also determin position of radix . and if there are multiple
+    for (int i=0; i<BUFFERSIZE; i++){
+        if (buffer[i] == 46){ // 46 = .
+            radix_count++;
+            if (radix_count > 1){
+                return (FileMeta){.status = ERR_MULTIPLE_RADIX};
+            }
+            meta.radix_pos = i;
+        }
+
+        if (buffer[i] != 46 && (buffer[i]<48 || buffer[i]>57)){ // check if invalid char
+            printf("invalid char at index %d: %c (%d)\n",i,buffer[i],buffer[i]);
+            return (FileMeta){.status = ERR_INVALID_CHAR};
+        }
     }
 
-    // files made by y-crucher can have an int part of up to ~2**63 so 20 should be enough
-    char window_str[20];
-    char* bufp = fgets(window_str, 20, fptr);
-    if (bufp == NULL){
-        perror("file empty?");
-        return -1;
+    if (radix_count == 0){
+        return (FileMeta){.status = ERR_NO_RADIX};
     }
 
-    for (int i=0; i<20; i++){
-        if (window_str[i] == 46) return i;
+    memmove(buffer+1, buffer, meta.radix_pos);
+    meta.zero_offset = 1;
+    for (; meta.zero_offset < BUFFERSIZE; meta.zero_offset++){
+        if (buffer[meta.zero_offset] != 48) break;
     }
+    meta.zero_offset--; // -- because we used it as an index but have to skip the first char
 
-    return -1;
-}
-
-size_t get_file_size(char* file_path){
-    FILE* fptr = fopen(file_path, "r");
-    if (fptr == NULL){
-        perror("Cant open file");
-        return 0;
-    }
-    fseek(fptr, 0L, SEEK_END);
-    size_t end = ftell(fptr);
-    fclose(fptr);
-    return end;
+    fseek(fptr, 0, SEEK_END); // quickly go to the end
+    meta.size = ftell(fptr); // and get the position
+    fseek(fptr, off, SEEK_SET); // go back to where you came from (technically always 0, but whatever)
+    return meta;
 }
 
 ScanResult cover_dist(char* file_path, int num_digits){
-    size_t file_size = get_file_size(file_path);
-    int radix_pos = get_radix_pos(file_path);
-    if (file_size == 0 || radix_pos <= 0) return (ScanResult){0,0};
-
-    FILE* fptr = fopen(file_path, "r"); // assume this to work, otherwise last check wouldve detected issue and returned
+    FILE* fptr = fopen(file_path, "r");
+    if (fptr == NULL) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
+    FileMeta meta = get_metadata(fptr);
+    if (meta.status != OK) return (ScanResult){.status = meta.status};
 
     // this uses 2 buffers since we read the file in chunks and need the last chunk (technically only the last "num_digits" digits of the previous chunk)
     // instead of copying the buffers i opted to swap pointers which should be faster
-    char buffera[BLOCKSIZE];
-    char bufferb[BLOCKSIZE];
+    char buffera[BUFFERSIZE];
+    char bufferb[BUFFERSIZE];
     char* buffer = buffera;
     char* buffer_prev = bufferb;
     char* buffer_tmp = NULL;
 
-    fread(buffera, 1, BLOCKSIZE, fptr);
+    fread(buffera, 1, BUFFERSIZE, fptr);
     size_t window = 0;
     size_t pow10mod = 1;
 
     // move the integer part to the right, overwriting the radix . to give a clean start to the sequence
-    memcpy(buffer+1, buffer, radix_pos);
-
-    // disregard the first 0s
-    // numbers like ln2 (0.69314) start with a 6, and not with a 0
-    // the integer sequence of some number 0.000123 would be (1,2,3)
-    size_t number_offset = 1;
-    for (; number_offset<BLOCKSIZE; number_offset++){
-        if (buffer[number_offset] != 48) break;
-    }
-    number_offset--; // -- because we used it as an index but have to skip the first char
+    memmove(buffer+1, buffer, meta.radix_pos);
 
     // generate the first window
-    for (size_t i=num_digits+number_offset; i>number_offset; i--){
+    for (size_t i = num_digits + meta.zero_offset; i > meta.zero_offset; i--){
         window += (buffer[i]-48) * pow10mod;
         pow10mod *= 10;
     }
 
     // bitset i think its called by the professionals...
     PackedBools bools = packedbools_make(pow10mod);
+    if (bools.remaining != pow10mod){ // allocation error, probably out of ram
+        return (ScanResult){.status = ERR_ALLOCATION};
+    }
     packedbools_set(window, &bools);
 
     // some more variables
     size_t file_offset, nextn, droppedn;
-    size_t block_offset = num_digits + 1 + number_offset;
-    file_offset = block_offset - number_offset;
+    size_t buffer_offset = num_digits + 1 + meta.zero_offset;
+    file_offset = buffer_offset - meta.zero_offset;
 
     // main loop
-    while (file_size > file_offset+block_offset){ // loop until file ends to not segfault
+    while (meta.size > file_offset+buffer_offset){ // loop until file ends to not segfault
         // actual hot loop
-        for (; block_offset<BLOCKSIZE; block_offset++){
-            nextn = buffer[block_offset]-48;
-            droppedn = buffer[block_offset-num_digits]-48;
+        for (; buffer_offset<BUFFERSIZE; buffer_offset++){
+            nextn = buffer[buffer_offset]-48;
+            droppedn = buffer[buffer_offset-num_digits]-48;
             window = window * 10 + nextn - droppedn * pow10mod;
 
-            packedbools_set(window, &bools);
-            if (bools.remaining == 0){
+            if (packedbools_set(window, &bools)){
                 packedbools_free(&bools);
-                size_t dist = file_offset + block_offset - num_digits - 1 - number_offset;
-                return (ScanResult){dist, window};
+                size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
+                return (ScanResult){.dist = dist, .last_num = window};
             }
         }
 
         // buffer ended, swap buffers and manually do the last digits that live in both buffers
         // love to use mmap, but is a pain for cross compat
-        file_offset += BLOCKSIZE;
+        file_offset += BUFFERSIZE;
         buffer_tmp = buffer;
         buffer = buffer_prev;
         buffer_prev = buffer_tmp;
 
         // read the next chunk and just walk "num_digits" steps, nextn from new buffer, droppedn from prev buffer
-        fread(buffer, 1, BLOCKSIZE, fptr);
-        block_offset = 0;
+        fread(buffer, 1, BUFFERSIZE, fptr);
+        buffer_offset = 0;
         for (int i=0; i<num_digits; i++){
-            nextn = buffer[block_offset]-48;
-            droppedn = buffer_prev[BLOCKSIZE-num_digits+i]-48;
+            nextn = buffer[buffer_offset]-48;
+            droppedn = buffer_prev[BUFFERSIZE-num_digits+i]-48;
             window = window * 10 + nextn - droppedn * pow10mod;
 
-            if (bools.remaining == 0){
+            if (packedbools_set(window, &bools)){
                 packedbools_free(&bools);
-                size_t dist = file_offset + block_offset - num_digits - 1 - number_offset;
-                return (ScanResult){dist, window};
+                size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
+                return (ScanResult){.dist=dist, .last_num=window};
             }
-            block_offset++;
+            buffer_offset++;
         }
     }
 
-    printf("Not enough digits in file");
-    return (ScanResult){0, 0};
+    return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS};
 }
