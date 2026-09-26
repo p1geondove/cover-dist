@@ -17,3 +17,8 @@ py-modules = []
 [[tool.setuptools.ext-modules]]
 name = "coverdist"
 sources = ["cover_dist.c"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
