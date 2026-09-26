@@ -188,7 +188,6 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
             nextn = (size_t)buffer[buffer_offset]-48;
             droppedn = (size_t)buffer[buffer_offset-num_digits]-48;
             window = window * 10 + nextn - droppedn * pow10mod;
-            printf("window:%zu, nextn:%zu, droppedn:%zu\n", window, nextn, droppedn);
 
             if (packedbools_set(window, &bools)){
                 packedbools_free(&bools);
