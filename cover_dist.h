@@ -2,7 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <errno.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+    #include <windows.h>
+#endif
 
 #define BUFFERSIZE (1024u * 1024u)
 #define min(a,b) ((a)<(b)?(a):(b))
@@ -48,10 +54,10 @@ PackedBools packedbools_make(size_t num_bools){
 }
 
 // sets bit to 1 and returns true if all bits are set
-int packedbools_set(size_t index, PackedBools* bools){
+bool packedbools_set(size_t index, PackedBools* bools){
     size_t byte_index = index >> 3; // divide by 8
     uint8_t mask = 1 << (index & 7); // bit mask
-    if (bools->bools[byte_index] & mask) return 0;
+    if (bools->bools[byte_index] & mask) return false;
     bools->bools[byte_index] |= mask;
     return --bools->remaining == 0;
 }
@@ -59,6 +65,29 @@ int packedbools_set(size_t index, PackedBools* bools){
 // helper function, just free(bools->bools)
 void packedbools_free(PackedBools* bools){
     free(bools->bools);
+}
+
+bool is_dir(char* path){
+#ifdef _WIN32
+    DWORD attr = GetFileAttributesA(path);
+    if (attr == INVALID_FILE_ATTRIBUTES){
+        errno = ENOENT; // collapse all Win32 "couldn't stat" cases to ENOENT
+        return false;
+    }
+    if (attr & FILE_ATTRIBUTE_DIRECTORY){
+        errno = EISDIR;
+        return true;
+    }
+    return false;
+#else
+    struct stat st;
+    if (stat(path, &st) != 0) return false;
+    if (S_ISDIR(st.st_mode)){
+        errno = EISDIR;
+        return true;
+    }
+    return false;
+#endif
 }
 
 // checks if the file is valid (only)
@@ -107,6 +136,7 @@ FileMeta get_metadata(FILE* fptr){
 }
 
 ScanResult cover_dist(char* file_path, size_t num_digits){
+    if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
     FILE* fptr = fopen(file_path, "r");
     if (fptr == NULL) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
     FileMeta meta = get_metadata(fptr);
