@@ -25,7 +25,8 @@ typedef enum {
     ERR_INVALID_CHAR,
     ERR_ALLOCATION,
     ERR_OPEN_FAILED,
-    ERR_INSUFFICIENT_DIGITS
+    ERR_INSUFFICIENT_DIGITS,
+    ERR_TOO_MANY_DIGITS
 } Status;
 
 typedef struct {
@@ -136,6 +137,7 @@ FileMeta get_metadata(FILE* fptr){
 }
 
 ScanResult cover_dist(char* file_path, size_t num_digits){
+    if (num_digits > 20) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
     if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
     FILE* fptr = fopen(file_path, "r");
     if (fptr == NULL) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};

@@ -32,6 +32,9 @@ static PyObject* py_cover_dist(PyObject* self, PyObject* args){
         case ERR_INSUFFICIENT_DIGITS:
             PyErr_SetString(PyExc_ValueError, "not enough digits in file");
             return NULL;
+        case ERR_TOO_MANY_DIGITS:
+            PyErr_SetString(PyExc_ValueError, "number of digits has to be an integer between 1 and 20 (both included)");
+            return NULL;
         case ERR_OPEN_FAILED:
             errno = res.save_errno;
             PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path_bytes);
