@@ -8,3 +8,4 @@ dist/
 .wheels/
 .venv/
 .python-version
+__pycache__
