@@ -19,14 +19,14 @@ typedef struct {
 } PackedBools;
 
 typedef enum {
-    OK,
-    ERR_NO_RADIX,
-    ERR_MULTIPLE_RADIX,
-    ERR_INVALID_CHAR,
-    ERR_ALLOCATION,
-    ERR_OPEN_FAILED,
-    ERR_INSUFFICIENT_DIGITS,
-    ERR_TOO_MANY_DIGITS
+    OK = 0u,
+    ERR_NO_RADIX = 1u,
+    ERR_MULTIPLE_RADIX = 2u,
+    ERR_INVALID_CHAR = 4u,
+    ERR_ALLOCATION = 8u,
+    ERR_OPEN_FAILED = 16u,
+    ERR_INSUFFICIENT_DIGITS = 32u,
+    ERR_TOO_MANY_DIGITS = 64u
 } Status;
 
 typedef struct {
@@ -139,11 +139,25 @@ FileMeta get_metadata(FILE* fptr){
 ScanResult cover_dist(char* file_path, size_t num_digits){
     if (num_digits > 20) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
     if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
+
     FILE* fptr = fopen(file_path, "r");
-    if (fptr == NULL) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
+
+    if (fptr == NULL){
+        return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
+        fclose(fptr);
+    }
+
     FileMeta meta = get_metadata(fptr);
-    if (meta.status != OK) return (ScanResult){.status = meta.status};
-    if (meta.size <= num_digits) return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // >= since we expect a radix point
+
+    if (meta.status != OK){
+        return (ScanResult){.status = meta.status};
+        fclose(fptr);
+    }
+
+    if (meta.size <= num_digits){
+        return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // >= since we expect a radix point
+        fclose(fptr);
+    }
 
     // this uses 2 buffers since we read the file in chunks and need the last chunk
     // technically only the last "num_digits" digits of the previous chunk
@@ -157,7 +171,6 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
     fread(buffera, 1, BUFFERSIZE, fptr);
     size_t window = 0;
     size_t pow10mod = 1;
-
 
     // move the integer part to the right, overwriting the radix . to give a clean start to the sequence
     memmove(buffer+1, buffer, meta.radix_pos);
@@ -234,5 +247,7 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
         }
     }
 
+    fclose(fptr);
+    packedbools_free(&bools);
     return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS};
 }
