@@ -1,3 +1,4 @@
+#pragma once
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,11 +44,12 @@ typedef struct {
     Status status;
 } ScanResult;
 
-PackedBools packedbools_make(size_t num_bools){
+static PackedBools packedbools_make(size_t num_bools){
     size_t bytes_needed = num_bools / 8 + (num_bools % 8 > 0);
     PackedBools bools;
-    void* _arr = calloc(bytes_needed,1);
+    void* _arr = malloc(bytes_needed);
     if (_arr == NULL) return (PackedBools){0,0};
+    memset(_arr, 0, bytes_needed);
     uint8_t* arr = (uint8_t*)_arr;
     bools.bools = arr;
     bools.remaining = num_bools;
@@ -55,7 +57,7 @@ PackedBools packedbools_make(size_t num_bools){
 }
 
 // sets bit to 1 and returns true if all bits are set
-bool packedbools_set(size_t index, PackedBools* bools){
+static inline bool packedbools_set(size_t index, PackedBools* bools){
     size_t byte_index = index >> 3; // divide by 8
     uint8_t mask = 1 << (index & 7); // bit mask
     if (bools->bools[byte_index] & mask) return false;
@@ -64,11 +66,11 @@ bool packedbools_set(size_t index, PackedBools* bools){
 }
 
 // helper function, just free(bools->bools)
-void packedbools_free(PackedBools* bools){
+static void packedbools_free(PackedBools* bools){
     free(bools->bools);
 }
 
-bool is_dir(char* path){
+static bool is_dir(char* path){
 #ifdef _WIN32
     DWORD attr = GetFileAttributesA(path);
     if (attr == INVALID_FILE_ATTRIBUTES){
@@ -91,8 +93,16 @@ bool is_dir(char* path){
 #endif
 }
 
+// check not meant for first chunk, returns false when . encountered, only 0-9 allowed
+static inline bool validate_buffer(char* buffer){
+    for (size_t i = 0; i < BUFFERSIZE; i++){
+        if (buffer[i]<48 || buffer[i]>57) return false;
+    }
+    return true;
+}
+
 // checks if the file is valid (only)
-FileMeta get_metadata(FILE* fptr){
+static FileMeta get_metadata(FILE* fptr){
     char buffer[BUFFERSIZE] = {0}; // allocate a block
     size_t radix_count = 0; // used to check wether ther is only exactly one
     FileMeta meta = {0}; // yeah... return data
@@ -136,27 +146,27 @@ FileMeta get_metadata(FILE* fptr){
     return meta;
 }
 
-ScanResult cover_dist(char* file_path, size_t num_digits){
+static ScanResult cover_dist(char* file_path, size_t num_digits){
     if (num_digits > 20) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
     if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
 
-    FILE* fptr = fopen(file_path, "r");
+    FILE* fptr = fopen(file_path, "rb");
 
     if (fptr == NULL){
-        return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
         fclose(fptr);
+        return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
     }
 
     FileMeta meta = get_metadata(fptr);
 
     if (meta.status != OK){
-        return (ScanResult){.status = meta.status};
         fclose(fptr);
+        return (ScanResult){.status = meta.status};
     }
 
-    if (meta.size <= num_digits){
-        return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // >= since we expect a radix point
+    if (meta.size - meta.zero_offset <= num_digits){
         fclose(fptr);
+        return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // >= since we expect a radix point
     }
 
     // this uses 2 buffers since we read the file in chunks and need the last chunk
@@ -168,7 +178,7 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
     char* buffer_prev = bufferb;
     char* buffer_tmp = NULL;
 
-    fread(buffera, 1, BUFFERSIZE, fptr);
+    fread(buffer, 1, BUFFERSIZE, fptr);
     size_t window = 0;
     size_t pow10mod = 1;
 
@@ -184,10 +194,12 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
     // bitset i think its called by the professionals...
     PackedBools bools = packedbools_make(pow10mod);
     if (bools.remaining != pow10mod){ // allocation error, probably out of ram
+        fclose(fptr);
         return (ScanResult){.status = ERR_ALLOCATION};
     }
 
     if (packedbools_set(window, &bools)){
+        fclose(fptr);
         return (ScanResult){.dist = num_digits, .last_num = window};
     }
 
@@ -205,6 +217,7 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
             window = window * 10 + nextn - droppedn * pow10mod;
 
             if (packedbools_set(window, &bools)){
+                fclose(fptr);
                 packedbools_free(&bools);
                 size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
                 return (ScanResult){.dist = dist, .last_num = window};
@@ -220,6 +233,14 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
 
         // read the next chunk and just walk "num_digits" steps, nextn from new buffer, droppedn from prev buffer
         fread(buffer, 1, BUFFERSIZE, fptr);
+
+        // validate buffer, surprisingly fast, only ~7% faster without the check
+        if (!validate_buffer(buffer)){
+            fclose(fptr);
+            packedbools_free(&bools);
+            return (ScanResult){.status = ERR_INVALID_CHAR};
+        }
+
         buffer_offset = 0;
         for (size_t i=0; i<num_digits; i++){
             nextn = (size_t)buffer[buffer_offset]-48;
@@ -227,9 +248,10 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
             window = window * 10 + nextn - droppedn * pow10mod;
 
             if (packedbools_set(window, &bools)){
+                fclose(fptr);
                 packedbools_free(&bools);
                 size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
-                return (ScanResult){.dist=dist, .last_num=window};
+                return (ScanResult){.dist = dist, .last_num = window};
             }
             buffer_offset++;
         }
@@ -241,9 +263,10 @@ ScanResult cover_dist(char* file_path, size_t num_digits){
         droppedn = (size_t)buffer[buffer_offset-num_digits]-48;
         window = window * 10 + nextn - droppedn * pow10mod;
         if (packedbools_set(window, &bools)){
+            fclose(fptr);
             packedbools_free(&bools);
             size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
-            return (ScanResult){.dist=dist, .last_num=window};
+            return (ScanResult){.dist = dist, .last_num = window};
         }
     }
 
