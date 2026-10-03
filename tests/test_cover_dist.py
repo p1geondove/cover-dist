@@ -35,9 +35,9 @@ def test_string():
 
 def test_allocation_error():
     # if given enough memory this could run, but any sane system (the year is 2026) should run out of memory
-    # this would need over 10 exabytes of memory (10**20/8 bytes)
+    # this would need over 1 exabyte of memory (10**19/8 bytes)
     with pytest.raises(MemoryError):
-        cover_dist(FILE_E, 20)
+        cover_dist(FILE_E, 19)
 
 def test_directory():
     with pytest.raises(IsADirectoryError):
@@ -82,8 +82,8 @@ def test_permission_denied(tmp_path):
         cover_dist(file, 1)
 
 def test_too_many_digits():
-    with pytest.raises(ValueError, match=r"number of digits has to be an integer between 1 and 20 \(both included\)"):
-        cover_dist(FILE_E, 21)
+    with pytest.raises(ValueError, match=r"number of digits has to be an integer between 1 and 19 \(both included\)"):
+        cover_dist(FILE_E, 20)
 
 def test_type_error():
     with pytest.raises(TypeError, match="expected str, bytes or os.PathLike object, not int"):
