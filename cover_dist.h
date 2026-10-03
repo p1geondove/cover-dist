@@ -59,7 +59,7 @@ static PackedBools packedbools_make(size_t num_bools){
 // sets bit to 1 and returns true if all bits are set
 static inline bool packedbools_set(size_t index, PackedBools* bools){
     size_t byte_index = index >> 3; // divide by 8
-    uint8_t mask = 1 << (index & 7); // bit mask
+    uint8_t mask = (uint8_t)(1 << (index & 7)); // bit mask
     if (bools->bools[byte_index] & mask) return false;
     bools->bools[byte_index] |= mask;
     return --bools->remaining == 0;
@@ -94,11 +94,12 @@ static bool is_dir(char* path){
 }
 
 // check not meant for first chunk, returns false when . encountered, only 0-9 allowed
-static inline bool validate_buffer(char* buffer){
-    for (size_t i = 0; i < BUFFERSIZE; i++){
-        if (buffer[i]<48 || buffer[i]>57) return false;
+static inline bool validate_buffer(char* buffer, size_t buffer_len){
+    uint8_t bad = 0;
+    for (size_t i = 0; i < buffer_len; i++){
+        bad |= (uint8_t)((buffer[i] - '0') > 9);
     }
-    return true;
+    return bad == 0;
 }
 
 // checks if the file is valid (only)
@@ -119,7 +120,7 @@ static FileMeta get_metadata(FILE* fptr){
     size_t buffer_size = min(meta.size, BUFFERSIZE);
 
     for (size_t i=0; i<buffer_size; i++){
-        if (buffer[i] == 46){ // 46 = .
+        if (buffer[i] == '.'){ // 46 = .
             radix_count++;
             if (radix_count > 1){
                 return (FileMeta){.status = ERR_MULTIPLE_RADIX};
@@ -127,7 +128,7 @@ static FileMeta get_metadata(FILE* fptr){
             meta.radix_pos = i;
         }
 
-        if (buffer[i] != 46 && (buffer[i]<48 || buffer[i]>57)){ // check if invalid char
+        if (buffer[i] != '.' && (buffer[i]<'0' || buffer[i]>'9')){ // check if invalid char
             return (FileMeta){.status = ERR_INVALID_CHAR};
         }
     }
@@ -139,7 +140,7 @@ static FileMeta get_metadata(FILE* fptr){
     memmove(buffer+1, buffer, meta.radix_pos);
     meta.zero_offset = 1;
     for (; meta.zero_offset < BUFFERSIZE; meta.zero_offset++){
-        if (buffer[meta.zero_offset] != 48) break;
+        if (buffer[meta.zero_offset] != '0') break;
     }
     meta.zero_offset--; // -- because we used it as an index but have to skip the first char
 
@@ -147,13 +148,12 @@ static FileMeta get_metadata(FILE* fptr){
 }
 
 static ScanResult cover_dist(char* file_path, size_t num_digits){
-    if (num_digits > 20) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
+    if (num_digits > 19) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
     if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
 
     FILE* fptr = fopen(file_path, "rb");
 
     if (fptr == NULL){
-        fclose(fptr);
         return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
     }
 
@@ -166,7 +166,7 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
 
     if (meta.size - meta.zero_offset <= num_digits){
         fclose(fptr);
-        return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // >= since we expect a radix point
+        return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS}; // <= since we expect a radix point
     }
 
     // this uses 2 buffers since we read the file in chunks and need the last chunk
@@ -178,7 +178,7 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
     char* buffer_prev = bufferb;
     char* buffer_tmp = NULL;
 
-    fread(buffer, 1, BUFFERSIZE, fptr);
+    size_t buffer_size_read = fread(buffer, 1, BUFFERSIZE, fptr);
     size_t window = 0;
     size_t pow10mod = 1;
 
@@ -187,7 +187,7 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
 
     // generate the first window
     for (size_t i = num_digits + meta.zero_offset; i > meta.zero_offset; i--){
-        window += (size_t)(buffer[i]-48) * pow10mod;
+        window += (size_t)(buffer[i]-'0') * pow10mod;
         pow10mod *= 10;
     }
 
@@ -208,12 +208,10 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
     size_t buffer_offset = num_digits + 1 + meta.zero_offset;
     file_offset = buffer_offset - meta.zero_offset;
 
-    // main loop
-    while (meta.size > file_offset+buffer_offset+BUFFERSIZE){ // loop until file ends to not segfault
-        // actual hot loop
-        for (; buffer_offset<BUFFERSIZE; buffer_offset++){
-            nextn = (size_t)buffer[buffer_offset]-48;
-            droppedn = (size_t)buffer[buffer_offset-num_digits]-48;
+    while (buffer_size_read){
+        for (; buffer_offset < buffer_size_read; buffer_offset++){
+            nextn = (size_t)buffer[buffer_offset]-'0';
+            droppedn = (size_t)buffer[buffer_offset-num_digits]-'0';
             window = window * 10 + nextn - droppedn * pow10mod;
 
             if (packedbools_set(window, &bools)){
@@ -224,27 +222,25 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
             }
         }
 
-        // buffer ended, swap buffers and manually do the last digits that live in both buffers
-        // love to use mmap, but is a pain for cross compat
+        // buffer has ended here, so the window spans across 2 buffers
         file_offset += BUFFERSIZE;
         buffer_tmp = buffer;
         buffer = buffer_prev;
         buffer_prev = buffer_tmp;
+        buffer_size_read = fread(buffer, 1, BUFFERSIZE, fptr);
 
-        // read the next chunk and just walk "num_digits" steps, nextn from new buffer, droppedn from prev buffer
-        fread(buffer, 1, BUFFERSIZE, fptr);
-
-        // validate buffer, surprisingly fast, only ~7% faster without the check
-        if (!validate_buffer(buffer)){
+        // simple check, takes little time
+        if (!validate_buffer(buffer, buffer_size_read)){
             fclose(fptr);
             packedbools_free(&bools);
             return (ScanResult){.status = ERR_INVALID_CHAR};
         }
 
+        // the loop that where nexn is in the new buffer and droppedn is in the old buffer
         buffer_offset = 0;
         for (size_t i=0; i<num_digits; i++){
-            nextn = (size_t)buffer[buffer_offset]-48;
-            droppedn = (size_t)buffer_prev[BUFFERSIZE-num_digits+i]-48;
+            nextn = (size_t)buffer[buffer_offset]-'0';
+            droppedn = (size_t)buffer_prev[BUFFERSIZE-num_digits+i]-'0';
             window = window * 10 + nextn - droppedn * pow10mod;
 
             if (packedbools_set(window, &bools)){
@@ -253,20 +249,15 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
                 size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
                 return (ScanResult){.dist = dist, .last_num = window};
             }
-            buffer_offset++;
-        }
-    }
 
-    // last bit of the buffer
-    for (;buffer_offset < meta.size % BUFFERSIZE; buffer_offset++){
-        nextn = (size_t)buffer[buffer_offset]-48;
-        droppedn = (size_t)buffer[buffer_offset-num_digits]-48;
-        window = window * 10 + nextn - droppedn * pow10mod;
-        if (packedbools_set(window, &bools)){
-            fclose(fptr);
-            packedbools_free(&bools);
-            size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
-            return (ScanResult){.dist = dist, .last_num = window};
+            // edge case: new buffer doesnt have enough digits
+            if (i >= buffer_size_read){
+                fclose(fptr);
+                packedbools_free(&bools);
+                return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS};
+            }
+
+            buffer_offset++;
         }
     }
 
