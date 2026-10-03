@@ -19,25 +19,32 @@ static PyObject* py_cover_dist(PyObject* self, PyObject* args){
     switch (res.status) {
         case ERR_INVALID_CHAR:
             PyErr_SetString(PyExc_ValueError, "invalid char found");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_NO_RADIX:
             PyErr_SetString(PyExc_ValueError, "can't find radix point");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_MULTIPLE_RADIX:
             PyErr_SetString(PyExc_ValueError, "found multiple radix points");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_ALLOCATION:
             PyErr_SetString(PyExc_MemoryError, "could not allocate memory for bitset");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_INSUFFICIENT_DIGITS:
             PyErr_SetString(PyExc_ValueError, "not enough digits in file");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_TOO_MANY_DIGITS:
             PyErr_SetString(PyExc_ValueError, "number of digits has to be an integer between 1 and 20 (both included)");
+            Py_DECREF(path_bytes);
             return NULL;
         case ERR_OPEN_FAILED:
             errno = res.save_errno;
             PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path_bytes);
+            Py_DECREF(path_bytes);
             return NULL;
         default:break;
     }
