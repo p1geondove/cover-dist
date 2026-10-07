@@ -284,3 +284,14 @@ static ScanResult cover_dist(char* file_path, size_t num_digits, volatile bool* 
     packedbools_free(&bools);
     return (ScanResult){.status = ERR_INSUFFICIENT_DIGITS};
 }
+
+static char* strerr_scan(ScanResult res){
+    if (res.status==ERR_NO_RADIX)            return "error: no radix point found\n";
+    if (res.status==ERR_MULTIPLE_RADIX)      return "error: multiple radix point found\n";
+    if (res.status==ERR_INSUFFICIENT_DIGITS) return "error: not enough digits in file\n";
+    if (res.status==ERR_TOO_MANY_DIGITS)     return "error: cant scan for that many digits\n";
+    if (res.status==ERR_OPEN_FAILED)         return strerror(res.save_errno);
+    if (res.status==ERR_ALLOCATION)          return "error: could not allocate memory, out of ram?\n";
+    if (res.status==ERR_INVALID_CHAR)        return "error: invalid char found\n";
+    return "no error";
+}
