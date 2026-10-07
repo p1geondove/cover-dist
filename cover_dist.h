@@ -1,3 +1,5 @@
+/* 100% hand coded */
+
 #pragma once
 #include <stdint.h>
 #include <stdlib.h>
@@ -27,7 +29,8 @@ typedef enum {
     ERR_ALLOCATION = 8u,
     ERR_OPEN_FAILED = 16u,
     ERR_INSUFFICIENT_DIGITS = 32u,
-    ERR_TOO_MANY_DIGITS = 64u
+    ERR_TOO_MANY_DIGITS = 64u,
+    ERR_INTERRUPT = 128u,
 } Status;
 
 typedef struct {
@@ -120,7 +123,7 @@ static FileMeta get_metadata(FILE* fptr){
     size_t buffer_size = min(meta.size, BUFFERSIZE);
 
     for (size_t i=0; i<buffer_size; i++){
-        if (buffer[i] == '.'){ // 46 = .
+        if (buffer[i] == '.'){
             radix_count++;
             if (radix_count > 1){
                 return (FileMeta){.status = ERR_MULTIPLE_RADIX};
@@ -147,9 +150,18 @@ static FileMeta get_metadata(FILE* fptr){
     return meta;
 }
 
-static ScanResult cover_dist(char* file_path, size_t num_digits){
+// _interrupt_flag can be NULL
+static ScanResult cover_dist(char* file_path, size_t num_digits, volatile bool* _interrupt_flag){
     if (num_digits > 19) return (ScanResult){.status = ERR_TOO_MANY_DIGITS};
     if (is_dir(file_path)) return (ScanResult){.status = ERR_OPEN_FAILED, .save_errno = errno};
+
+    volatile bool interrupt_flag;
+    volatile bool* interrupt_flag_ptr = &interrupt_flag;
+    if (_interrupt_flag == NULL){
+        interrupt_flag = false;
+    } else {
+        interrupt_flag_ptr = (bool*)_interrupt_flag;
+    }
 
     FILE* fptr = fopen(file_path, "rb");
 
@@ -220,6 +232,13 @@ static ScanResult cover_dist(char* file_path, size_t num_digits){
                 size_t dist = file_offset + buffer_offset - num_digits - 1 - meta.zero_offset;
                 return (ScanResult){.dist = dist, .last_num = window};
             }
+        }
+
+        // check interrupt flag
+        if (*interrupt_flag_ptr){
+            fclose(fptr);
+            packedbools_free(&bools);
+            return (ScanResult){.status = ERR_INTERRUPT};
         }
 
         // buffer has ended here, so the window spans across 2 buffers
