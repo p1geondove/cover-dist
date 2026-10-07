@@ -22,10 +22,14 @@ def _worker(number_file:Path, mem:SharedMem):
     distances:list[int] = []
 
     for n in range(1,MAX_DIGITS+1):
-        dist, last_num = cover_dist(number_file, n)
-        with mem.lock:
-            mem.res_dict[num_name]["distances"].append(dist)
-            mem.res_dict[num_name]["last_nums"].append(last_num)
+        try:
+            print(f"calc {number_file.name} to {n}")
+            dist, last_num = cover_dist(number_file, n)
+            with mem.lock:
+                mem.res_dict[num_name]["distances"].append(dist)
+                mem.res_dict[num_name]["last_nums"].append(last_num)
+        except:
+            return
 
 def main():
     mem = SharedMem()
