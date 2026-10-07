@@ -1,6 +1,6 @@
 *.out
 nums/
-coverdist.egg-info/
+cover_dist.egg-info/
 compile_flags.txt
 results.json
 *.so
