@@ -1,0 +1,13 @@
+LICENSE
+README.md
+pyproject.toml
+src/cover_dist/__init__.py
+src/cover_dist/_core.c
+src/cover_dist/_core.pyi
+src/cover_dist/_types.py
+src/cover_dist/py.typed
+src/cover_dist.egg-info/PKG-INFO
+src/cover_dist.egg-info/SOURCES.txt
+src/cover_dist.egg-info/dependency_links.txt
+src/cover_dist.egg-info/top_level.txt
+tests/test_cover_dist.py

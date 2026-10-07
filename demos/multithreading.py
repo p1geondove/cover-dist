@@ -2,7 +2,7 @@ from pathlib import Path
 from threading import Lock, Thread
 import json
 
-from coverdist import cover_dist
+from cover_dist import cover_dist
 
 NUM_FILES = list(Path("./nums/").iterdir())
 MAX_DIGITS = 7

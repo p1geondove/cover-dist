@@ -11,7 +11,13 @@
 
 #define POLL_INTERVAL_US 50000
 
+#ifndef PY_TYPES_MODULE
+#define PY_TYPES_MODULE "cover_dist._types"   // module that defines Status and FileMeta
+#endif
+
 static volatile bool g_cancel = false;
+static PyObject* Status_cls = NULL;
+static PyObject* FileMeta_cls = NULL;
 
 typedef struct {
     char* path;
@@ -20,6 +26,24 @@ typedef struct {
     ScanResult res;
     PyThread_type_lock done;
 } ScanJob;
+
+static int load_py_types(void){
+    if (Status_cls && FileMeta_cls) return 0;
+
+    PyObject* mod = PyImport_ImportModule(PY_TYPES_MODULE);
+    if (!mod) return -1;
+
+    Status_cls   = PyObject_GetAttrString(mod, "Status");
+    FileMeta_cls = PyObject_GetAttrString(mod, "FileMeta");
+    Py_DECREF(mod);
+
+    if (!Status_cls || !FileMeta_cls){
+        Py_CLEAR(Status_cls);
+        Py_CLEAR(FileMeta_cls);
+        return -1;
+    }
+    return 0;
+}
 
 static void scan_thread(void* arg){
     ScanJob* job = arg;
@@ -118,7 +142,7 @@ static PyObject* py_cover_dist(PyObject* self, PyObject* args){
             PyErr_SetString(PyExc_ValueError, "not enough digits in file");
             break;
         case ERR_TOO_MANY_DIGITS:
-            PyErr_SetString(PyExc_ValueError, "number of digits has to be an integer between 1 and 20 (both included)");
+            PyErr_SetString(PyExc_ValueError, "number of digits has to be an integer between 1 and 19 (both included)");
             break;
         case ERR_OPEN_FAILED:
             errno = job.res.save_errno;
@@ -133,9 +157,70 @@ static PyObject* py_cover_dist(PyObject* self, PyObject* args){
     return result;
 }
 
+PyObject* py_get_metadata(PyObject* self, PyObject* args){
+    PyObject* path_bytes = NULL;
+    PyObject* dataclass = NULL;
+    PyObject* status = NULL;
+    FILE* f = NULL;
+
+    if (!PyArg_ParseTuple(args, "O&", PyUnicode_FSConverter, &path_bytes)){
+        return NULL;
+    }
+
+    if (load_py_types() < 0) goto done;
+
+    const char* path = PyBytes_AsString(path_bytes);
+    if (!path) goto done;
+
+    f = fopen(path, "rb");
+
+    if (f == NULL){
+        PyErr_SetFromErrnoWithFilenameObject(PyExc_OSError, path_bytes);
+        goto done;
+    }
+
+    FileMeta meta = get_metadata(f);
+    fclose(f);
+    f = NULL;
+
+    switch (meta.status){
+        case ERR_MULTIPLE_RADIX:
+            PyErr_SetString(PyExc_ValueError, "found multiple radix points");
+            goto done;
+        case ERR_NO_RADIX:
+            PyErr_SetString(PyExc_ValueError, "can't find radix point");
+            goto done;
+        case ERR_INVALID_CHAR:
+            PyErr_SetString(PyExc_ValueError, "invalid char found");
+            goto done;
+        default:
+            break;
+    }
+
+    status = PyObject_CallFunction(Status_cls, "I", (unsigned int)meta.status);
+    if (!status) goto done;
+
+    dataclass = PyObject_CallFunction(
+        FileMeta_cls, "nnnN",
+        (Py_ssize_t)meta.size,
+        (Py_ssize_t)meta.radix_pos,
+        (Py_ssize_t)meta.zero_offset,
+        status
+    );
+
+    status = NULL;
+
+done:
+    if (f) fclose(f);
+    Py_XDECREF(status);
+    Py_DECREF(path_bytes);
+    return dataclass;
+}
+
 static PyMethodDef CoverDistMethods[] = {
     {"cover_dist", py_cover_dist, METH_VARARGS, "Digits needed and last digits to cover all n-digit numbers"},
     {"cancel", py_cancel, METH_NOARGS, "Stop all current and future scans"},
+    {"get_metadata", py_get_metadata, METH_VARARGS, "Returns dataclass for metadata from number file"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -146,9 +231,9 @@ static PyModuleDef_Slot coverdist_slots[] = {
     {0, NULL}
 };
 
-static struct PyModuleDef coverdistmodule = {
+static struct PyModuleDef cover_dist_module = {
     PyModuleDef_HEAD_INIT,
-    "coverdist",
+    "cover_dist._core",
     NULL,
     0,
     CoverDistMethods,
@@ -158,6 +243,6 @@ static struct PyModuleDef coverdistmodule = {
     NULL
 };
 
-PyMODINIT_FUNC PyInit_coverdist(void){
-    return PyModuleDef_Init(&coverdistmodule);
+PyMODINIT_FUNC PyInit__core(void){
+    return PyModuleDef_Init(&cover_dist_module);
 }

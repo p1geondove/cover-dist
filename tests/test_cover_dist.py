@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from coverdist import cover_dist
+from cover_dist import cover_dist
 
 DIR_TESTNUMS = Path("test_numbers/")
 FILE_BIG_INTPART =       DIR_TESTNUMS / "big_intpart.txt"
